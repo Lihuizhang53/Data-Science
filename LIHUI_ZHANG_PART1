@@ -1,0 +1,269 @@
+# Grace Hopper 2020 SMS analysis
+
+# ----------
+# Setup
+# ----------
+# Load the libraries needed in this project
+library(tidyverse)
+library(psych)
+library(car)
+library(stargazer)
+library(reshape2)
+library(MASS)
+library(sjPlot)
+library(sjmisc)
+library(ggplot2)
+#----------------
+rm(list = ls())
+wd <- "~/Downloads/Analyst Task Materials/"
+
+#change the data file name into "Analyst Task Materials"
+
+# Read in data
+rand_data <- read.csv(file.path(wd, "data", "randomization.csv"))
+sms_data <- read.csv(file.path(wd, "data", "text_message_data.csv"))
+survey_data <- read.csv(file.path(wd, "data", "survey_data.csv"))
+turnout_data <- read.csv(file.path(wd, "data", "turnout_data.csv"))
+
+# Check each experimental dataset for missing and duplicate values
+# Looks good I guess?
+# ----------
+# duplicates and missing values, and Clean data
+# ----------
+#________rand_data ___________
+# overview of the data
+glimpse(rand_data)
+## 25001 observations and 9 variables, age is continous and the rest variables are factors
+# check on duplicates
+dup_records_rand_id <- duplicated(rand_data$ai_id)
+sum(dup_records_rand_id)
+# no duplicates in rand_data with id
+dup_records_rand_phone <- duplicated(rand_data$phone_number)
+sum(dup_records_rand_phone)
+# no duplicates in rand_data with phone number
+
+# Clean up marital status variable
+summary(rand_data$marital_status)
+
+rand_data$marital_status_bin <- NA
+rand_data$marital_status_bin[rand_data$marital_status == "unmarried"|rand_data$marital_status == "separated"] <- "Unmarried"
+# typo -changed to "separated"
+rand_data$marital_status_bin[rand_data$marital_status == "married"] <- "Married"
+
+rand_data$marital_status_bin <- factor(rand_data$marital_status_bin)
+summary(rand_data$marital_status_bin)
+
+##
+# Bin age variable
+rand_data$age_bin[rand_data$age < 30] <- "Under 30"
+
+## add in these people who are in the 30 and 55
+rand_data$age_bin[rand_data$age >= 30 & rand_data$age <= 55] <- "30-55"
+rand_data$age_bin[rand_data$age > 55] <- "55+"
+
+rand_data$age_bin <- factor(rand_data$age_bin)
+summary(rand_data$age_bin)
+
+## fix the gender unknown category
+rand_data$gender[rand_data$gender =="unknown"] <- NA
+rand_data$gender<-factor(rand_data$gender)
+summary(rand_data$gender)
+
+#fix race variable
+summary(rand_data$race)
+rand_data$race[rand_data$race =="other"] <- NA
+rand_data$race[rand_data$race ==""] <- NA
+rand_data$race<-factor(rand_data$race)
+summary(rand_data$race)
+
+# check missing values in rand_data
+summary(rand_data)
+# I will perform listwise deletion on the dataset
+rand_data <- na.omit(rand_data)
+dim(rand_data)
+## the data adds up with 23519 obervations 
+
+#________sms_data____________
+## clean the second dataset sms_data
+# overview of the data
+glimpse(sms_data)
+## 46,374 observations and 3 variables, all variables are factors
+
+# check on duplicates for sms_data
+dup_records_sms <- duplicated(sms_data$phone_number)
+sum(dup_records_sms)
+# there are 21615 duplicates, something is up in the data
+
+## We need to make sure everyone was sent the right texts
+## I'm confused because there are multiple texts for each person in the dataset. Can you check this?
+# The messages field is kind of messy unfortunately
+table(sms_data$message_text)
+
+##recode the message_text variable into sms_treat variable with the treatment text =1, and placebo = 0
+summary(sms_data)
+summary(sms_data$message_direction)
+##filter the data to only keep the meaningful text messages
+sms_data_1<-sms_data %>% 
+  filter(message_direction=="outbound")
+
+##recode the text message variable into sms_treat
+sms_data_2<- sms_data_1 %>% 
+  group_by(phone_number) %>% 
+  count() %>% 
+  mutate(sms_treat = n-1)
+  
+##24631 observations, the number adds up with the duplicates
+##
+sum(duplicated(sms_data_2$phone_number))
+#no duplicate
+
+# check missing values in sms_data
+summary(sms_data_2)
+# no missing data
+
+
+#________survey_data____________
+## clean the third dataset survey_data
+# overview of the data
+glimpse(survey_data)
+## 14,425 observations and 6 variables
+
+# check on duplicates for survey_data
+dup_records_survey <- duplicated(survey_data$phone_number)
+sum(dup_records_survey)
+# there are 0 duplicates
+# check missing values in survey_data
+summary(survey_data)
+# no missing data
+
+#________turnout_data____________
+# overview of the data
+glimpse(turnout_data)
+## 25,206 observations and 2 variables
+
+# check on duplicates for survey_data
+dup_records_turnout <- duplicated(turnout_data$ai_id)
+sum(dup_records_turnout)
+# there are 205 duplicates, drop the duplicates with the code below
+turnout_data <- turnout_data[!duplicated(turnout_data$ai_id), ]
+dim(turnout_data)
+# 25001 observations, number adds up
+# check missing and invalid values in turnout_data
+summary(turnout_data)
+# 238 missing values on turnout and listwise deletion method
+turnout_data <- na.omit(turnout_data)
+summary(turnout_data)
+
+# -----------------
+# Combine datasets
+# -----------------
+
+df1 <- merge(rand_data, turnout_data, by = "ai_id")
+
+# Add survey data
+df2 <- merge(df1, survey_data, by = "phone_number")
+
+# ----------
+# Balance
+# ----------
+
+## Check for balance across assignment
+## We need to double-check treatment assignment balance by age, race, and marital status
+#changed age to age_bin
+bal <- glm(sms_treat ~ race + age + marital_status_bin, 
+           data = df, family = "binomial")
+summary(bal)
+## caucasian and unmarried people are slightly oversampled
+
+# ----------
+# Results
+# ----------
+
+# Estimate Turnout
+## Control for race, marital status, age (binned), gender, and
+## added gender variable
+
+turnout_model <- glm(turnout ~ sms_treat + race +gender + marital_status_bin + 
+                       age_bin + support_hopper, 
+                     data = df, family = "binomial")
+summary(turnout_model)
+
+turnout_model %>%
+  coef() %>%
+  exp()
+
+1 - exp(turnout_model$coef[11])
+
+#some supporters did not turn out to vote (2.6%), treatment does not have an effect on turnout
+
+#plot the model results
+plot_model(turnout_model)
+
+# Estimate Persuasion
+
+##recode the variable support_hopper into a numeric variable
+
+summary(df2$support_hopper)
+
+df2$support_hopper.n <- car::recode(df2$support_hopper, "'strongly oppose'=1; 'somewhat oppose'=2; 'neither support nor oppose'=3;'somewhat support'=4; 'strong support'=5;'refused'= NA;")
+
+df2$support_hopper.n <- as.numeric(df2$support_hopper.n)
+
+summary(df2$support_hopper.n)
+
+## Control for race, marital status, age (binned), gender, and 
+## whether they ended up voting in the election later
+persuasion_model <- lm(support_hopper ~ sms_treat + gender+race + marital_status_bin + 
+                          age_bin + turnout,
+                        data = df)
+summary(persuasion_model)
+
+#plot the model results
+plot_model(persuasion_model)
+
+##
+stargazer(turnout_model, persuasion_model, type="text", single.row = TRUE)
+
+# ----------
+# Subgroup Effects
+# ----------
+
+## I wonder if the treatment was especially effective at motivating turnout among any subgroups. 
+## Can you write a function to check a given subgroup for differences in treatment effectiveness?
+
+## interaction terms can tell us how the effect of ses message might be different for the subgroups
+
+turnout_model_race <- glm(turnout ~ sms_treat*race + gender+ marital_status_bin + 
+                       age_bin+support_hopper.n, 
+                     data = df2, family = "binomial", na.action = na.omit)
+summary(turnout_model_race)
+##
+##
+
+plot_model(turnout_model_race, type="pred", terms =c("sms_treat", "race"))
+
+## age subgroup
+turnout_model_age <- glm(turnout ~ sms_treat*age_bin + gender+ marital_status_bin + 
+                            age_bin+support_hopper.n, 
+                          data = df2, family = "binomial", na.action = na.omit)
+summary(turnout_model_age)
+##
+##
+
+plot_model(turnout_model_age, type="pred", terms =c("sms_treat", "age_bin"))
+
+## gender subgroup
+turnout_model_gender <- glm(turnout ~ sms_treat*gender + gender+ marital_status_bin + 
+                           age_bin+support_hopper.n, 
+                         data = df2, family = "binomial", na.action = na.omit)
+summary(turnout_model_gender)
+##
+plot_model(turnout_model_gender, type="pred", terms =c("sms_treat", "gender"))
+
+##marital status
+
+
+
+
+
+
